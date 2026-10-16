@@ -15,14 +15,11 @@ flowchart LR
     Compare --> Registry["Provider registry"]
     Compare --> Judge["Judge service"]
     Compare --> Pricing["Pricing config"]
-    Registry --> OA["OpenAI adapter"]
-    Registry --> AN["Anthropic adapter"]
-    Registry --> GE["Google adapter"]
+    Registry --> FP["Foundry provider (one per deployment)"]
+    FP --> Auth["Auth (Entra ID managed identity)"]
   end
-  OA --> OpenAI[("OpenAI API")]
-  AN --> Anthropic[("Anthropic API")]
-  GE --> Gemini[("Gemini API")]
-  Judge --> OpenAI
+  FP --> Foundry[("Azure AI Foundry resource")]
+  Judge --> Foundry
 ```
 
 ## Client Component Structure
@@ -46,17 +43,12 @@ classDiagram
     +id string
     +run(prompt) ProviderResult
   }
-  class OpenAIProvider
-  class AnthropicProvider
-  class GoogleProvider
+  class FoundryProvider
   class ProviderRegistry {
-    +list() Provider[]
-    +get(id) Provider
+    +createProviders(config, auth) Provider[]
   }
-  Provider <|.. OpenAIProvider
-  Provider <|.. AnthropicProvider
-  Provider <|.. GoogleProvider
-  ProviderRegistry o-- Provider
+  Provider <|.. FoundryProvider
+  ProviderRegistry ..> Provider
 ```
 
 ## Sequence Diagram: Run Comparison
@@ -137,6 +129,6 @@ flowchart LR
   subgraph RG["Resource group: rg-token-exploration"]
     Plan["App Service plan (Linux, B1)"] --> App["Web app (Node 22)"]
   end
-  App -- "HTTPS" --> LLMs[("OpenAI, Anthropic, Gemini APIs")]
+  App -- "HTTPS" --> LLMs[("Azure AI Foundry (gpt-4.1, gpt-4.1-mini)")]
   Users([Users]) -- "HTTPS" --> App
 ```

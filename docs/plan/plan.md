@@ -14,17 +14,19 @@ As a user, I want to enter a prompt once and execute it across multiple AI model
 
 ## Scope and Status
 
-- Status: planning only. No implementation has started.
+- Status: implemented and deployed to Azure App Service.
 - Reuses the existing app: Express API in `server/`, React + Vite UI in `client/`, npm workspaces, ES modules.
 - Replaces the original Next.js, TypeScript, Tailwind CSS, and shadcn/ui requirement. The conventions in `.github/copilot-instructions.md` apply.
-- Llama 3 is out of scope. The reference image lists it, but the supported models are the three below.
+- Models are served by an existing Azure AI Foundry resource (`raminzarghany-ai-test-resource` in `rz-ai-first-rg`), so the app compares the chat models deployed there. GPT-4o, Claude, Gemini, and Llama are not deployed on that resource and are out of scope.
 - Architecture, class, sequence, and data flow diagrams live in [architecture.md](architecture.md).
 
 ## Supported Models
 
-- GPT-4o
-- Claude 3.5 Sonnet
-- Gemini 1.5 Pro
+The app compares the Foundry deployments listed in `FOUNDRY_MODELS` (default below). Currently deployed chat models:
+
+- GPT-4.1 (`gpt-4.1`)
+- GPT-4.1 mini (`gpt-4.1-mini`)
+- GPT-4o (`gpt-4o`, version 2024-11-20)
 
 Adding a model must only require a new provider adapter and a pricing entry; no changes to the route, the UI table, or the judge.
 
@@ -43,9 +45,8 @@ The UI is a single **Model Comparison** card that matches the reference image (T
 
    | Model | Cost | Time | Output quality |
    | --- | --- | --- | --- |
-   | GPT-4o | $0.03 | 12s | 3.5 stars |
-   | Claude 3.5 Sonnet | $0.02 | 15s | 3 stars |
-   | Gemini 1.5 Pro | $0.01 | 10s | 3 stars |
+   | GPT-4.1 | $0.00036 | 7.2s | 5 stars |
+   | GPT-4.1 mini | $0.0001 | 6.7s | 4.5 stars |
 
    - Header row is bold with a light grey background; rows are separated by thin borders.
    - Cost is formatted as USD (for example `$0.03`; values under one cent show more precision, for example `$0.004`).
@@ -80,7 +81,7 @@ The UI is a single **Model Comparison** card that matches the reference image (T
 
 ## Output Quality Scoring
 
-- A configurable judge model (default GPT-4o, set with `JUDGE_MODEL`) scores each response from 1 to 10 against the original prompt.
+- A configurable judge model (default `gpt-4.1`, set with `JUDGE_MODEL`) scores each response from 1 to 10 against the original prompt.
 - The judge returns structured JSON: `{ "score": number, "rationale": string }`. Invalid judge output is treated as "not scored".
 - Responses are judged without revealing which model produced them.
 - The UI converts the 1 to 10 score to a five-star rating.
@@ -108,7 +109,8 @@ Tracked per model and available in the row details: response time, tokens per se
 - Express routes under `/api`.
 - Provider/Adapter pattern in `server/src/providers/`:
   - Common interface: `run(prompt) -> { text, inputTokens, outputTokens }`.
-  - One adapter per vendor (OpenAI, Anthropic, Google), registered in a provider registry.
+  - One adapter for Azure AI Foundry (OpenAI-compatible v1 chat completions), instantiated once per deployment in `FOUNDRY_MODELS` by the provider registry.
+  - Authentication: Entra ID through `DefaultAzureCredential` (managed identity in Azure, `az login` locally), or `FOUNDRY_API_KEY` when set.
   - Services: `compare` (parallel fan-out with `Promise.allSettled`), `judge`, `pricing`.
 - Input validated at the API boundary (prompt required, trimmed, maximum length).
 - Errors returned as `{ "error": { "message": string } }`.
@@ -120,10 +122,10 @@ Tracked per model and available in the row details: response time, tokens per se
 | --- | --- |
 | `PORT` | Server port (Azure provides this) |
 | `CORS_ORIGIN` | Allowed origin in development |
-| `OPENAI_API_KEY` | GPT-4o and default judge |
-| `ANTHROPIC_API_KEY` | Claude 3.5 Sonnet |
-| `GEMINI_API_KEY` | Gemini 1.5 Pro |
-| `JUDGE_MODEL` | Judge model id (default GPT-4o) |
+| `FOUNDRY_ENDPOINT` | Foundry resource endpoint, for example `https://<resource>.openai.azure.com` |
+| `FOUNDRY_API_KEY` | Optional key; when unset, Entra ID is used |
+| `FOUNDRY_MODELS` | Comma-separated deployment names to compare (default `gpt-4.1,gpt-4.1-mini,gpt-4o`) |
+| `JUDGE_MODEL` | Judge deployment name (default `gpt-4.1`) |
 | `MAX_PROMPT_CHARS` | Prompt length limit |
 
 ## API Endpoints
@@ -144,7 +146,8 @@ Response:
 {
   "results": [
     {
-      "model": "gpt-4o",
+      "model": "gpt-4.1",
+      "name": "GPT-4.1",
       "inputTokens": 12,
       "outputTokens": 240,
       "totalTokens": 252,
@@ -230,10 +233,13 @@ Web app         : token-exploration-<unique-suffix>   (name must be globally uni
    az webapp config set --name <app-name> --resource-group rg-token-exploration --startup-file "npm start" --generic-configurations '{"healthCheckPath": "/api/health"}'
    ```
 
-5. Set application settings (the user supplies the key values locally; they are not stored in the repo):
+5. Give the web app a managed identity, grant it access to the Foundry resource, and set application settings (no secrets are needed):
 
    ```powershell
-   az webapp config appsettings set --name <app-name> --resource-group rg-token-exploration --settings NODE_ENV=production OPENAI_API_KEY=<value> ANTHROPIC_API_KEY=<value> GEMINI_API_KEY=<value> JUDGE_MODEL=gpt-4o
+   $principal = az webapp identity assign --name <app-name> --resource-group rg-token-exploration --query principalId -o tsv
+   $foundryId = az cognitiveservices account show --name raminzarghany-ai-test-resource --resource-group rz-ai-first-rg --query id -o tsv
+   az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal --role "Cognitive Services OpenAI User" --scope $foundryId
+   az webapp config appsettings set --name <app-name> --resource-group rg-token-exploration --settings NODE_ENV=production FOUNDRY_ENDPOINT=https://raminzarghany-ai-test-resource.openai.azure.com FOUNDRY_MODELS=gpt-4.1,gpt-4.1-mini,gpt-4o JUDGE_MODEL=gpt-4.1
    ```
 
 6. Build and package: `npm run build`, then zip the app (server source, built `client/dist`, root and server `package.json` files, lockfile) excluding `node_modules`. Dependencies are installed by App Service during deployment.
@@ -256,4 +262,4 @@ Web app         : token-exploration-<unique-suffix>   (name must be globally uni
 
 ## Definition of Done
 
-A user can enter a single one-shot prompt in the Model Comparison card, run it against GPT-4o, Claude 3.5 Sonnet, and Gemini 1.5 Pro simultaneously, and see a comparison table with cost, time, and star-rated output quality (with response and token details on expand), without any database or persistent storage. The UI matches the reference image. All unit and integration tests pass, coverage is at least 90%, and the application is deployed and reachable on Azure App Service.
+A user can enter a single one-shot prompt in the Model Comparison card, run it against the deployed Foundry models (GPT-4.1, GPT-4.1 mini, and GPT-4o), and see a comparison table with cost, time, and star-rated output quality (with response and token details on expand), without any database or persistent storage. The UI matches the reference image. All unit and integration tests pass, coverage is at least 90%, and the application is deployed and reachable on Azure App Service.
