@@ -2,14 +2,9 @@
 
 ## Objective
 
-Build **Token Exploration**, a responsive web application on top of the existing Node.js (Express) + React (Vite) monorepo. A user enters a single one-shot prompt and compares the performance of multiple Large Language Models (LLMs) on that exact prompt.
+Build **Token Exploration**, a responsive web application on top of the existing Node.js (Express) + React (Vite) monorepo. A user asks any question once (a single one-shot prompt) and the app runs that exact prompt against multiple LLMs, then shows a **Model Comparison** table of cost, time, and output quality.
 
-The application helps users understand trade-offs between:
-
-- Cost
-- Response time
-- Output quality
-- Token usage
+The application helps users learn the trade-offs between quality, speed, and cost, and discover which model works best for their use case.
 
 The application is lightweight and stateless. **Do not use a database or persist any data.**
 
@@ -21,56 +16,74 @@ As a user, I want to enter a prompt once and execute it across multiple AI model
 
 - Status: planning only. No implementation has started.
 - Reuses the existing app: Express API in `server/`, React + Vite UI in `client/`, npm workspaces, ES modules.
-- Replaces the original Next.js, TypeScript, Tailwind CSS, and shadcn/ui requirement. The existing stack and conventions in `.github/copilot-instructions.md` apply.
-- Llama 3 is out of scope.
+- Replaces the original Next.js, TypeScript, Tailwind CSS, and shadcn/ui requirement. The conventions in `.github/copilot-instructions.md` apply.
+- Llama 3 is out of scope. The reference image lists it, but the supported models are the three below.
+- Architecture, class, sequence, and data flow diagrams live in [architecture.md](architecture.md).
 
 ## Supported Models
-
-The first version supports:
 
 - GPT-4o
 - Claude 3.5 Sonnet
 - Gemini 1.5 Pro
 
-Adding a model must only require a new provider adapter and a pricing entry; no changes to the route, UI table, or judge.
+Adding a model must only require a new provider adapter and a pricing entry; no changes to the route, the UI table, or the judge.
+
+## UI Design: Model Comparison Component
+
+The UI is a single **Model Comparison** card that matches the reference image (Token Exploration infographic, item 4).
+
+### Card layout
+
+1. **Header bar**: dark navy background, a small brand icon on the left, the title "Model Comparison" in white, and a collapse chevron on the right. Clicking the chevron collapses or expands the card body.
+2. **Body**: white background, rounded corners, light shadow.
+3. **Prompt row**:
+   - Label "Prompt" above a single text input (a multi-line textarea that starts one row tall and grows).
+   - A blue primary button labelled **Run across models** to the right of the input.
+4. **Results table** (shown after a run):
+
+   | Model | Cost | Time | Output quality |
+   | --- | --- | --- | --- |
+   | GPT-4o | $0.03 | 12s | 3.5 stars |
+   | Claude 3.5 Sonnet | $0.02 | 15s | 3 stars |
+   | Gemini 1.5 Pro | $0.01 | 10s | 3 stars |
+
+   - Header row is bold with a light grey background; rows are separated by thin borders.
+   - Cost is formatted as USD (for example `$0.03`; values under one cent show more precision, for example `$0.004`).
+   - Time is formatted in seconds (for example `12s`, or `1.8s` under 10 seconds).
+   - Output quality is a five-star rating in gold with half-star support.
+5. **Row details**: each model row can be expanded to show the full generated response, input/output/total tokens, and tokens per second. This keeps the main table identical to the image while still exposing token analytics.
+
+### Behavior and states
+
+- One shot only: the user submits one prompt per run. There is no chat history; a new run replaces the previous results.
+- Run button is disabled while running or when the prompt is empty. While running it shows a loading state, and each model row shows a spinner until its result arrives (or the whole table appears when the response returns).
+- A failing model shows an inline error in its row (cost, time, and quality shown as an em dash); other models still display.
+- Empty state before the first run: short hint text under the prompt.
+- Character count and estimated token count are shown under the prompt input (estimate: characters / 4).
+- Quality stars map from the judge score: stars = score / 2, rounded to the nearest half star. If not scored, show "Not scored".
+- Accessible: the table uses real table semantics, stars have a text alternative (for example "3.5 out of 5"), the button and input have labels, keyboard operable (Ctrl+Enter submits).
+- Responsive: on narrow screens the prompt row stacks and the table scrolls horizontally.
 
 ## Core Workflow
 
-### Step 1: User Enters Prompt
-
-UI contains:
-
-- Large text area, placeholder: `Enter your one-shot prompt here...`
-- Character count
-- Estimated token count
-- "Run Comparison" button (disabled while running or when the prompt is empty)
-
-### Step 2: Execute Across Models
-
-On Run, the identical prompt is sent to all configured models in parallel. For each model capture:
-
-- Model name
-- Input, output, and total token counts
-- Response time (latency)
-- Tokens per second
-- Estimated cost
-- Full generated output
-- Error, if the call failed (a failing model must not fail the whole comparison)
-
-### Step 3: Compare Results
-
-A comparison table with these columns:
-
-| Model | Input Tokens | Output Tokens | Total Tokens | Cost | Time | Output Quality |
-| --- | --- | --- | --- | --- | --- | --- |
-
-Beneath the table, expandable panels show the full response for each model.
+1. The user types a question in the Prompt field and clicks **Run across models**.
+2. The client calls `POST /api/compare` with the prompt.
+3. The server sends the identical prompt to all configured models in parallel and captures, per model:
+   - Model name
+   - Input, output, and total token counts
+   - Response time (latency) and tokens per second
+   - Estimated cost
+   - Full generated output
+   - Error, if the call failed (one failing model must not fail the comparison)
+4. The judge model scores each output.
+5. The client renders the Model Comparison table.
 
 ## Output Quality Scoring
 
 - A configurable judge model (default GPT-4o, set with `JUDGE_MODEL`) scores each response from 1 to 10 against the original prompt.
-- The judge returns structured JSON: `{ "score": number, "rationale": string }`. Invalid judge output is treated as "not scored" and shown as such.
+- The judge returns structured JSON: `{ "score": number, "rationale": string }`. Invalid judge output is treated as "not scored".
 - Responses are judged without revealing which model produced them.
+- The UI converts the 1 to 10 score to a five-star rating.
 
 ## Cost Calculation
 
@@ -80,16 +93,15 @@ Beneath the table, expandable panels show the full response for each model.
 
 ## Performance Metrics
 
-Track and display per model: response time, tokens per second, total tokens, cost.
+Tracked per model and available in the row details: response time, tokens per second, token counts. Cost, time, and quality appear in the main table.
 
 ## Technical Requirements
 
 ### Frontend (`client/`)
 
-- React function components and hooks, Vite.
-- All HTTP calls in `client/src/api/`.
-- Loading, error, and empty states; per-model error display.
-- Accessible, responsive layout.
+- React function components and hooks, Vite, plain CSS (no new UI framework).
+- Components: `ModelComparison` (card, header, collapse), `PromptForm`, `ResultsTable`, `ResultRow` (with expandable details), `StarRating`.
+- All HTTP calls in `client/src/api/compare.js`; components never call `fetch` directly.
 
 ### Backend (`server/`)
 
@@ -151,111 +163,22 @@ Response:
 
 `GET /api/health` returns `{ "status": "ok" }`.
 
-## Architecture
+## Architecture and Diagrams
 
-### System Architecture
-
-```mermaid
-flowchart LR
-  User([User]) --> UI["React UI (client/dist)"]
-  subgraph Azure["Azure App Service (Linux, Node)"]
-    UI
-    API["Express API (/api)"]
-    UI -- "/api/compare" --> API
-    API --> Compare["Compare service"]
-    Compare --> Registry["Provider registry"]
-    Compare --> Judge["Judge service"]
-    Compare --> Pricing["Pricing config"]
-    Registry --> OA["OpenAI adapter"]
-    Registry --> AN["Anthropic adapter"]
-    Registry --> GE["Google adapter"]
-  end
-  OA --> OpenAI[("OpenAI API")]
-  AN --> Anthropic[("Anthropic API")]
-  GE --> Gemini[("Gemini API")]
-  Judge --> OpenAI
-```
-
-### Provider/Adapter Class Structure
-
-```mermaid
-classDiagram
-  class Provider {
-    <<interface>>
-    +id string
-    +run(prompt) ProviderResult
-  }
-  class OpenAIProvider
-  class AnthropicProvider
-  class GoogleProvider
-  class ProviderRegistry {
-    +list() Provider[]
-    +get(id) Provider
-  }
-  Provider <|.. OpenAIProvider
-  Provider <|.. AnthropicProvider
-  Provider <|.. GoogleProvider
-  ProviderRegistry o-- Provider
-```
-
-### Sequence Diagram: Run Comparison
-
-```mermaid
-sequenceDiagram
-  actor U as User
-  participant UI as React UI
-  participant API as Express /api/compare
-  participant C as Compare service
-  participant P as Provider adapters
-  participant J as Judge service
-  U->>UI: Enter prompt, click Run Comparison
-  UI->>API: POST /api/compare { prompt }
-  API->>API: Validate input
-  API->>C: compare(prompt)
-  par For each model
-    C->>P: run(prompt)
-    P-->>C: text, token counts, latency
-  end
-  C->>C: Compute cost and tokens per second
-  C->>J: score(prompt, outputs)
-  J-->>C: score and rationale per output
-  C-->>API: results
-  API-->>UI: 200 { results }
-  UI-->>U: Comparison table and response panels
-```
-
-### Data Flow Diagram
-
-```mermaid
-flowchart TD
-  A["Prompt text (browser)"] --> B["Validate and trim (API boundary)"]
-  B --> C["Fan out to provider adapters (parallel)"]
-  C --> D["Raw output, token counts, latency per model"]
-  D --> E["Pricing config"]
-  E --> F["Cost and tokens per second"]
-  D --> G["Judge model"]
-  G --> H["Quality score and rationale"]
-  F --> I["Aggregate results (in memory only)"]
-  H --> I
-  D --> I
-  I --> J["JSON response"]
-  J --> K["Comparison table and expandable panels"]
-```
-
-No data is stored: prompts, outputs, and scores exist only in memory for the duration of the request and in client state.
+All architecture, class, sequence, and data flow diagrams are in [architecture.md](architecture.md). Keep them in sync with this plan when the design changes.
 
 ## Testing Requirements
 
 - Server: `node:test` + `supertest`. Client: Vitest + Testing Library.
-- Unit tests for every provider adapter (mocked vendor SDK/HTTP), registry, pricing, compare service, judge service, validation, and every UI component and API module.
+- Unit tests for every provider adapter (mocked vendor calls), registry, pricing, compare service, judge service, validation, and every UI component and API module (including `StarRating` half-star mapping, cost and time formatting, expand/collapse, and per-model error rows).
 - Integration tests for `POST /api/compare` and `GET /api/health` with mocked providers, covering success, partial model failure, all models failing, invalid input, and judge failure.
-- Coverage target: 90% or higher, enforced in CI scripts.
+- Coverage target: 90% or higher, enforced by the test scripts.
 - **All unit and integration tests must pass successfully.** `npm test`, `npm run lint`, and `npm run build` must all exit with code 0 before the work is considered done or deployed.
 
 ## Documentation Requirements
 
 - Update `README.md` with setup, environment variables, scripts, and deployment.
-- Keep the architecture, class, sequence, and data flow diagrams in this plan current (Mermaid).
+- Maintain [architecture.md](architecture.md) (Mermaid diagrams).
 
 ## Deployment Criteria (Azure App Service)
 
@@ -265,7 +188,7 @@ Deployment may proceed only when all of the following are true:
 2. `npm run lint` and `npm run build` pass.
 3. In production, Express serves the built client (`client/dist`) and `/api` from a single process, with SPA fallback for non-API routes.
 4. The server listens on the port provided by Azure (`process.env.PORT`).
-5. A root `npm start` script runs the server in production mode; Node engine is declared in `package.json`.
+5. A root `npm start` script runs the server in production mode; the Node engine is declared in `package.json`.
 6. No secrets in the repository; API keys are set as App Service application settings.
 7. `GET /api/health` is configured as the App Service health check path.
 8. HTTPS only is enabled.
@@ -275,13 +198,13 @@ Deployment may proceed only when all of the following are true:
 
 Target: one Linux App Service running Node 22 that serves both UI and API. Method: Azure CLI zip deploy. The user signs in with `az login`; credentials are never shared in chat or committed.
 
-Defaults (change before deploying if needed): region `westeurope`, SKU `B1`, resource names below.
+Defaults (change before deploying if needed): region `westeurope`, SKU `B1`.
 
 ```text
-Subscription : e8f2b54a-b92d-410e-ba91-81fdc2cdcff5
-Resource group: rg-token-exploration
+Subscription    : e8f2b54a-b92d-410e-ba91-81fdc2cdcff5
+Resource group  : rg-token-exploration
 App Service plan: asp-token-exploration (Linux, B1)
-Web app: token-exploration-<unique-suffix>   (name must be globally unique)
+Web app         : token-exploration-<unique-suffix>   (name must be globally unique)
 ```
 
 1. Verify locally: `npm install`, `npm test`, `npm run lint`, `npm run build`.
@@ -326,11 +249,11 @@ Web app: token-exploration-<unique-suffix>   (name must be globally unique)
 ## Implementation Phases (not started)
 
 1. Server: config and pricing, provider interface and adapters, registry, compare and judge services, `POST /api/compare`, tests.
-2. Client: prompt form with counts, comparison table, response panels, `api/compare.js`, tests.
+2. Client: `ModelComparison` card matching the reference image, `PromptForm`, `ResultsTable`, `ResultRow`, `StarRating`, `api/compare.js`, tests.
 3. Production readiness: static serving of `client/dist`, start script, engines, `.env.example`, README.
 4. Verification: tests, lint, build, coverage at least 90%.
 5. Azure deployment following the steps above.
 
 ## Definition of Done
 
-A user can enter a single prompt, run it against GPT-4o, Claude 3.5 Sonnet, and Gemini 1.5 Pro simultaneously, and compare cost, latency, token usage, quality score, and generated output without any database or persistent storage. All unit and integration tests pass, coverage is at least 90%, and the application is deployed and reachable on Azure App Service.
+A user can enter a single one-shot prompt in the Model Comparison card, run it against GPT-4o, Claude 3.5 Sonnet, and Gemini 1.5 Pro simultaneously, and see a comparison table with cost, time, and star-rated output quality (with response and token details on expand), without any database or persistent storage. The UI matches the reference image. All unit and integration tests pass, coverage is at least 90%, and the application is deployed and reachable on Azure App Service.
